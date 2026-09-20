@@ -174,6 +174,7 @@ def runner():
         "started_at": time.perf_counter(),
         "record": False,
         "text_calls": [],
+        "escalations": [],
     }
     return a
 

@@ -4,10 +4,16 @@ import base64
 import time
 from pathlib import Path
 
+from . import diagnose
 from .browser import Browser, Paused, StalePage, progress_fingerprint
 from .loop_guard import action_key, detect_loop, redundant_choice
 from .model import action_space, choose, field_context, field_text
 from .questions import MAX_STEPS
+
+# Stops worth asking a vision model about. A challenge is the operator's to solve, and an
+# exhausted action budget is the end of the run, so neither is a misunderstanding to fix.
+ESCALATE_ON = {"model_blocked", "no_progress", "navigation_loop", "page_unavailable"}
+MAX_ESCALATIONS = 3
 
 
 class Agent:
@@ -24,6 +30,13 @@ class Agent:
             url=state["page"]["url"],
             elapsed_ms=state["elapsed_ms"],
         )
+        # Whether a fallback message was worth sending is the only honest measure of the
+        # fallback: it is answered by what the very next action did to the page.
+        if state["escalations"] and state["escalations"][-1].get("pending"):
+            waiting = state["escalations"][-1]
+            waiting["outcome"] = {"action": action.get("action"), "kind": action.get("kind"),
+                                  "page_changed": action["page_changed"]}
+            waiting["pending"] = False
         if state["record"]:
             (self.record_dir / f"{state['elapsed_ms']:06d}.jpg").write_bytes(
                 base64.b64decode(state["page"]["screenshot"])
@@ -89,6 +102,7 @@ class Agent:
             no_progress_count=0,
             loop_since=0,
             guidance=[],
+            escalations=[],
             plan=plan,
             plan_index=0,
             decisions=[],
@@ -104,16 +118,58 @@ class Agent:
     def _blocked(self, reason):
         """Stop the run, keeping what it looked like when it stopped.
 
-        A stopped run is exactly when a person - or a fallback model - needs to see the
-        page, and by then the page has usually moved on. Every block goes through here so
-        no stop site can forget the evidence.
+        Then, once, try to get it moving again: a stop the agent cannot explain is the one
+        blocker left, and a vision model looking at the page may see what it missed.
+
+        Every block goes through here so no stop site can forget the evidence.
         """
         state = self.state
         state["decision"] = None
         state["status"] = "blocked"
         state["block_reason"] = reason
         state["incident"] = self._incident(reason)
+        self._escalate()
         return self.snapshot()
+
+    def _escalate(self):
+        """Ask the vision fallback about this stop, when asking is worth it.
+
+        Never twice about the same page: if nothing has changed since the last attempt,
+        another answer cannot be better than the one already given, and a message the
+        agent has already been handed is not worth paying for again.
+        """
+        state = self.state
+        if (state.get("block_reason") or {}).get("code") not in ESCALATE_ON:
+            return
+        if len(state["escalations"]) >= MAX_ESCALATIONS or not diagnose.configured():
+            return
+        page = state.get("page") or {}
+        if state["escalations"] and state["escalations"][-1].get("page") == page.get("fingerprint"):
+            return
+        attempt = {"page": page.get("fingerprint"), "elapsed_ms": state["elapsed_ms"],
+                   "block_reason": state["block_reason"]}
+        try:
+            result = diagnose.diagnose(state["incident"], state.get("goal", ""))
+        except Exception as error:  # noqa: BLE001 - a fallback that fails must not hide the stop
+            state["escalations"].append({
+                **attempt, "layer": "unknown", "route": "abstain", "message": "", "needs": "",
+                "confidence": 0.0, "reason": str(error), "outcome": None, "pending": False,
+            })
+            return
+        state["escalations"].append({**attempt, **result, "outcome": None, "pending": False})
+        if result["route"] != "jev":
+            return
+        # A message for the agent is guidance, from the fallback rather than the operator.
+        # The stall baseline resets for the same reason a human message resets it: the
+        # guard that just stopped the run reads the history that caused the stop.
+        state["guidance"].append({"text": result["message"], "elapsed_ms": state["elapsed_ms"],
+                                  "from": "fallback"})
+        state["decision"] = None
+        state["no_progress_count"] = 0
+        state["loop_since"] = len(state["history"])
+        state["block_reason"] = None
+        state["status"] = "ready"
+        state["escalations"][-1]["pending"] = True
 
     def _incident(self, reason):
         """What the run looked like at the moment it stopped. Best effort, never fatal."""
@@ -231,7 +287,8 @@ class Agent:
                 raise ValueError("This run has finished; start a new task")
             if (state.get("block_reason") or {}).get("code") == "captcha_detected":
                 raise ValueError("Solve the challenge in the browser window, then choose Resume task")
-            state["guidance"].append({"text": text.strip(), "elapsed_ms": state["elapsed_ms"]})
+            state["guidance"].append({"text": text.strip(), "elapsed_ms": state["elapsed_ms"],
+                                      "from": "operator"})
             state["decision"] = None
             state["no_progress_count"] = 0
             state["loop_since"] = len(state["history"])

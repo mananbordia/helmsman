@@ -390,7 +390,7 @@ def agent_with_stub_browser():
     runner.state = {
         "browser": stub, "goal": "goal", "page": {"url": "u", "actions": [], "fingerprint": "fp"},
         "decision": None, "history": [], "status": "ready", "block_reason": None,
-        "human_control": False, "no_progress_count": 0, "loop_since": 0, "guidance": [],
+        "human_control": False, "no_progress_count": 0, "loop_since": 0, "guidance": [], "escalations": [],
         "plan": ["goal"], "plan_index": 0, "decisions": [], "text_calls": [],
         "elapsed_ms": 0, "started_at": None, "record": False,
     }
@@ -775,7 +775,9 @@ def test_guidance_clears_the_block_and_starts_a_fresh_stall_baseline():
     assert runner.state["block_reason"] is None
     assert runner.state["loop_since"] == 2, "the old history would block the next step again"
     assert runner.state["no_progress_count"] == 0
-    assert runner.state["guidance"] == [{"text": "Use the Sign In to Pay link instead", "elapsed_ms": 0}]
+    assert runner.state["guidance"] == [
+        {"text": "Use the Sign In to Pay link instead", "elapsed_ms": 0, "from": "operator"},
+    ]
 
 
 def test_a_guidance_message_reaches_the_model(monkeypatch):
@@ -927,3 +929,182 @@ def test_finishing_records_no_incident():
 
     assert snapshot["status"] == "done"
     assert "incident" not in runner.state
+
+
+# ------------------------------------------- the vision fallback, when a run stops
+
+
+def fallback(route="abstain", calls=None, **extra):
+    """A stand-in for the vision call, so the policy is testable without a provider."""
+    from types import SimpleNamespace
+
+    def fake(incident, _goal):
+        if calls is not None:
+            calls.append(incident.get("block_reason"))
+        return {"layer": "action", "route": route, "message": extra.get("message", ""),
+                "needs": extra.get("needs", ""), "confidence": extra.get("confidence", 0.8),
+                "reason": extra.get("reason", "")}
+
+    return SimpleNamespace(configured=lambda: True, diagnose=fake)
+
+
+def test_a_stop_asks_the_fallback_and_hands_the_message_to_the_agent(monkeypatch):
+    from jev_ultrafast import agent as agent_module
+
+    runner, stub = agent_with_stub_browser()
+    stub.screenshot.return_value = "jpeg"
+    runner.state["history"] = [{"step": 1}]
+    monkeypatch.setattr(agent_module, "diagnose", fallback("jev", message="Sign in first"))
+
+    snapshot = runner._blocked({"code": "model_blocked"})
+
+    assert snapshot["status"] == "ready", "a message worth sending should start the run again"
+    assert runner.state["block_reason"] is None
+    assert runner.state["guidance"] == [{"text": "Sign in first", "elapsed_ms": 0, "from": "fallback"}]
+    assert runner.state["loop_since"] == 1, "the guard would stop the next step on the same history"
+    assert runner.state["escalations"][0]["route"] == "jev"
+    assert runner.state["escalations"][0]["pending"] is True
+
+
+def test_a_stop_that_needs_a_person_keeps_the_block(monkeypatch):
+    from jev_ultrafast import agent as agent_module
+
+    runner, stub = agent_with_stub_browser()
+    stub.screenshot.return_value = "jpeg"
+    monkeypatch.setattr(agent_module, "diagnose", fallback("human", needs="the account email"))
+
+    snapshot = runner._blocked({"code": "model_blocked"})
+
+    assert snapshot["status"] == "blocked", "only a person can answer this"
+    assert runner.state["escalations"][0]["needs"] == "the account email"
+    assert runner.state["guidance"] == [], "a request for a person is not guidance for the agent"
+
+
+def test_an_abstain_keeps_the_block(monkeypatch):
+    from jev_ultrafast import agent as agent_module
+
+    runner, stub = agent_with_stub_browser()
+    stub.screenshot.return_value = "jpeg"
+    monkeypatch.setattr(agent_module, "diagnose", fallback("abstain"))
+
+    snapshot = runner._blocked({"code": "no_progress"})
+
+    assert snapshot["status"] == "blocked"
+    assert runner.state["escalations"][0]["route"] == "abstain"
+    assert runner.state["guidance"] == []
+
+
+def test_a_challenge_never_reaches_the_fallback(monkeypatch):
+    from jev_ultrafast import agent as agent_module
+
+    calls = []
+    monkeypatch.setattr(agent_module, "diagnose", fallback("jev", calls=calls, message="keep going"))
+    runner, stub = agent_with_stub_browser()
+    stub.screenshot.return_value = "jpeg"
+    runner.state["page"]["captcha"] = {"provider": "recaptcha"}
+
+    assert runner.stop_for_captcha() is True
+
+    assert calls == [], "a message cannot solve a challenge"
+    assert runner.state["status"] == "blocked"
+    assert runner.state["guidance"] == []
+
+
+@pytest.mark.parametrize("code", ["model_blocked", "no_progress", "navigation_loop", "page_unavailable"])
+def test_every_escalating_stop_asks_once(monkeypatch, code):
+    from jev_ultrafast import agent as agent_module
+
+    calls = []
+    monkeypatch.setattr(agent_module, "diagnose", fallback("abstain", calls=calls))
+    runner, stub = agent_with_stub_browser()
+    stub.screenshot.return_value = "jpeg"
+
+    runner._blocked({"code": code})
+
+    assert calls == [{"code": code}]
+
+
+def test_the_fallback_is_not_asked_twice_about_one_page(monkeypatch):
+    # Nothing changed since the last answer, so another answer cannot be better.
+    from jev_ultrafast import agent as agent_module
+
+    calls = []
+    monkeypatch.setattr(agent_module, "diagnose", fallback("abstain", calls=calls))
+    runner, stub = agent_with_stub_browser()
+    stub.screenshot.return_value = "jpeg"
+
+    runner._blocked({"code": "model_blocked"})
+    runner._blocked({"code": "model_blocked"})
+
+    assert len(calls) == 1
+
+
+def test_the_fallback_stops_after_its_cap(monkeypatch):
+    from jev_ultrafast import agent as agent_module
+
+    calls = []
+    monkeypatch.setattr(agent_module, "diagnose", fallback("abstain", calls=calls))
+    runner, stub = agent_with_stub_browser()
+    stub.screenshot.return_value = "jpeg"
+
+    for page in range(5):
+        runner.state["page"]["fingerprint"] = f"fp-{page}"
+        runner._blocked({"code": "model_blocked"})
+
+    assert len(calls) == 3, "a run should not spend freely on a fallback that is not helping"
+
+
+def test_no_provider_means_no_escalation(monkeypatch):
+    from types import SimpleNamespace
+
+    from jev_ultrafast import agent as agent_module
+
+    monkeypatch.setattr(agent_module, "diagnose", SimpleNamespace(configured=lambda: False))
+    runner, stub = agent_with_stub_browser()
+    stub.screenshot.return_value = "jpeg"
+
+    snapshot = runner._blocked({"code": "model_blocked"})
+
+    assert snapshot["status"] == "blocked"
+    assert runner.state["escalations"] == []
+
+
+def test_a_failing_fallback_does_not_hide_the_stop(monkeypatch):
+    from jev_ultrafast import agent as agent_module
+
+    def explode(_incident, _goal):
+        raise RuntimeError("Vision provider returned HTTP 503")
+
+    monkeypatch.setattr(agent_module, "diagnose",
+                        type("F", (), {"configured": staticmethod(lambda: True), "diagnose": staticmethod(explode)}))
+    runner, stub = agent_with_stub_browser()
+    stub.screenshot.return_value = "jpeg"
+
+    snapshot = runner._blocked({"code": "model_blocked"})
+
+    assert snapshot["status"] == "blocked", "the stop is the truth; the fallback is an extra"
+    recorded = runner.state["escalations"][0]
+    assert recorded["route"] == "abstain"
+    assert "503" in recorded["reason"]
+
+
+def test_the_next_action_records_whether_the_message_helped(monkeypatch):
+    import time as time_module
+
+    from jev_ultrafast import agent as agent_module
+
+    runner, stub = agent_with_stub_browser()
+    stub.screenshot.return_value = "jpeg"
+    runner.state["started_at"] = time_module.perf_counter()
+    monkeypatch.setattr(agent_module, "diagnose", fallback("jev", message="Sign in first"))
+    runner._blocked({"code": "model_blocked"})
+    assert runner.state["escalations"][0]["pending"] is True
+
+    runner.state["history"].append({"step": 1, "action": "Sign in", "kind": "click"})
+    runner.state["page"] = {"url": "u", "actions": [], "fingerprint": "fp", "text": "after signing in"}
+    runner.complete_observation({"url": "u", "actions": [], "fingerprint": "fp", "text": "before"})
+
+    escalation = runner.state["escalations"][0]
+    assert escalation["pending"] is False
+    assert escalation["outcome"]["page_changed"] is True
+    assert escalation["outcome"]["action"] == "Sign in"

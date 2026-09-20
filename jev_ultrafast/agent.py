@@ -37,11 +37,9 @@ class Agent:
         )
         reason = detect_loop(state["history"][state.get("loop_since", 0) :])
         if reason:
-            state["status"] = "blocked"
-            state["block_reason"] = reason
-        else:
-            state["status"] = "ready"
-            state["block_reason"] = None
+            return self._blocked(reason)
+        state["status"] = "ready"
+        state["block_reason"] = None
         return self.snapshot()
 
     def recover_observation(self):
@@ -55,10 +53,8 @@ class Agent:
                 break
             except StalePage:
                 if time.monotonic() >= deadline:
-                    state["status"] = "blocked"
-                    state["block_reason"] = {"code": "page_unavailable"}
                     state["elapsed_ms"] = round((time.perf_counter() - state["started_at"]) * 1000)
-                    return self.snapshot()
+                    return self._blocked({"code": "page_unavailable"})
                 time.sleep(0.1)
         if state["history"] and state["history"][-1]["page_changed"] is None:
             return self.complete_observation(before_page)
@@ -105,6 +101,41 @@ class Agent:
             self.record_dir.mkdir(parents=True, exist_ok=True)
             (self.record_dir / "000000.jpg").write_bytes(base64.b64decode(page["screenshot"]))
 
+    def _blocked(self, reason):
+        """Stop the run, keeping what it looked like when it stopped.
+
+        A stopped run is exactly when a person - or a fallback model - needs to see the
+        page, and by then the page has usually moved on. Every block goes through here so
+        no stop site can forget the evidence.
+        """
+        state = self.state
+        state["decision"] = None
+        state["status"] = "blocked"
+        state["block_reason"] = reason
+        state["incident"] = self._incident(reason)
+        return self.snapshot()
+
+    def _incident(self, reason):
+        """What the run looked like at the moment it stopped. Best effort, never fatal."""
+        state = self.state
+        page = state.get("page") or {}
+        try:
+            shot = state["browser"].screenshot()
+        except Exception:  # noqa: BLE001 - a failed capture must not turn a stop into a crash
+            shot = page.get("screenshot")
+        return {
+            "block_reason": reason,
+            "url": page.get("url"),
+            "title": page.get("title"),
+            "text": (page.get("text") or "")[:4000],
+            "screenshot": shot,
+            "elapsed_ms": state.get("elapsed_ms", 0),
+            "steps": [
+                {key: item.get(key) for key in ("step", "action", "kind", "operation", "page_changed")}
+                for item in state.get("history", [])[-8:]
+            ],
+        }
+
     def snapshot(self):
         return {
             **{k: v for k, v in self.state.items() if k != "browser"},
@@ -115,11 +146,7 @@ class Agent:
         captcha = self.state["page"].get("captcha")
         if not captcha:
             return False
-        self.state["decision"] = None
-        self.state["status"] = "blocked"
-        self.state["block_reason"] = {"code": "captcha_detected", **captcha}
-        if self.state["started_at"] is not None:
-            self.state["elapsed_ms"] = round((time.perf_counter() - self.state["started_at"]) * 1000)
+        self._blocked({"code": "captcha_detected", **captcha})
         return True
 
     def hold_if_paused(self):
@@ -300,14 +327,17 @@ class Agent:
                 if not state["browser"].fresh(page):
                     state["status"] = "ready"
                     raise StalePage("Page changed since the decision. Choose again.")
-                state["status"] = "done" if selected == "DONE" else "blocked"
-                state["block_reason"] = {"code": "model_blocked"} if selected == "BLOCKED" else None
-                state["plan_index"] = int(selected == "DONE")
                 state["elapsed_ms"] = round((time.perf_counter() - state["started_at"]) * 1000)
+                state["plan_index"] = int(selected == "DONE")
+                if selected == "BLOCKED":
+                    return self._blocked({"code": "model_blocked"})
+                state["status"] = "done"
+                state["block_reason"] = None
                 return self.snapshot()
             action = next(a for a in page["actions"] if a["id"] == selected)
             if len(state["history"]) >= MAX_STEPS:
-                state["status"] = "blocked"
+                state["elapsed_ms"] = round((time.perf_counter() - state["started_at"]) * 1000)
+                self._blocked({"code": "budget_exhausted", "actions": MAX_STEPS})
                 raise ValueError(f"Stopped at the {MAX_STEPS}-action demo budget")
             repeated = redundant_choice(
                 state["history"][state.get("loop_since", 0) :], progress_fingerprint(page), action
@@ -315,10 +345,8 @@ class Agent:
             if repeated:
                 if not state["browser"].fresh(page, action):
                     raise StalePage("Page changed before loop check. Observe again.")
-                state["status"] = "blocked"
-                state["block_reason"] = {"code": "no_progress", "actions": repeated}
                 state["elapsed_ms"] = round((time.perf_counter() - state["started_at"]) * 1000)
-                return self.snapshot()
+                return self._blocked({"code": "no_progress", "actions": repeated})
             text, helper = None, None
             if action["kind"] == "fill":
                 if not state["browser"].fresh(page):

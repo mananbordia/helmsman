@@ -481,6 +481,14 @@ class Browser:
         cdp("Target.activateTarget", targetId=self.target)
         self.call("Page.bringToFront")
 
+    def screenshot(self):
+        """A JPEG of the current viewport.
+
+        Evidence, not model input: this exists so a stopped run can be looked at
+        afterwards, by a person or by a fallback model.
+        """
+        return capture_viewport(self.call)
+
     def human_view(self):
         """Read the current screen without asking the model or changing the page."""
         return {

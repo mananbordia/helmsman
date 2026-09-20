@@ -872,3 +872,58 @@ def test_no_guidance_leaves_the_question_shape_unchanged(monkeypatch):
         model.choose(page, "Open the result", [])
 
     assert "operator_messages" not in captured["questions"]["operation"]["instructions"]
+
+
+# -------------------------------------------------- evidence when a run stops
+
+
+def test_a_block_keeps_what_the_page_looked_like():
+    # A stopped run is when the page most needs looking at, and by then it has moved on.
+    runner, stub = agent_with_stub_browser()
+    stub.screenshot.return_value = "jpeg-base64"
+    runner.state["page"] = {
+        "url": "https://example.com/pay", "title": "Pay", "text": "Sign in to pay",
+        "actions": [], "fingerprint": "fp", "captcha": {"provider": "recaptcha"},
+    }
+
+    assert runner.stop_for_captcha() is True
+
+    incident = runner.state["incident"]
+    assert runner.state["status"] == "blocked"
+    assert incident["block_reason"] == {"code": "captcha_detected", "provider": "recaptcha"}
+    assert incident["url"] == "https://example.com/pay"
+    assert "Sign in to pay" in incident["text"]
+    assert incident["screenshot"] == "jpeg-base64"
+
+
+def test_a_failed_capture_still_blocks_the_run():
+    # Evidence is best effort. Losing the picture must not lose the stop itself.
+    runner, stub = agent_with_stub_browser()
+    stub.screenshot.side_effect = RuntimeError("the tab is gone")
+    runner.state["page"] = {
+        "url": "u", "title": "t", "text": "", "actions": [],
+        "fingerprint": "fp", "captcha": {"provider": "hcaptcha"},
+    }
+
+    assert runner.stop_for_captcha() is True
+
+    assert runner.state["status"] == "blocked"
+    assert runner.state["incident"]["screenshot"] is None
+    assert runner.state["incident"]["block_reason"]["provider"] == "hcaptcha"
+
+
+def test_finishing_records_no_incident():
+    # Only a stop is evidence. A completed run needs no diagnosis afterwards.
+    import time as time_module
+
+    runner, stub = agent_with_stub_browser()
+    runner.state["started_at"] = time_module.perf_counter()
+    runner.state["page"]["fingerprint"] = "fp"
+    runner.state["decision"] = {"choice": "DONE", "operation": "DONE", "target": None,
+                                "confidence": 1.0, "probabilities": {"DONE": 1.0}}
+    stub.fresh.return_value = True
+
+    snapshot = runner.command("act", {"fingerprint": "fp"})
+
+    assert snapshot["status"] == "done"
+    assert "incident" not in runner.state

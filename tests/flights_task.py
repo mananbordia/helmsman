@@ -1,12 +1,12 @@
-"""Live Google Flights search. Calls TypeSafe; never selects or books a flight."""
+"""The flight search used as a measured task, and an independent check on its result.
 
-import argparse
+This is not library behaviour: it defines one task and verifies the page the agent
+ends on, without trusting the model's own DONE answer. The measured run and the test
+suite both use it, so it lives beside them rather than in an examples folder.
+"""
+
 import base64
-import json
-from pathlib import Path
 from urllib.parse import parse_qs, urlparse
-
-from jev_ultrafast import Agent
 
 URL = "https://www.google.com/travel/flights?hl=en"
 GOALS = (
@@ -36,33 +36,3 @@ def verify(page):
         "results": bool(flights) and all("Sunday, September 20" in f for f in flights),
     }
     return {"passed": all(checks.values()), "checks": checks, "visible_flights": flights}
-
-
-def main():
-    parser = argparse.ArgumentParser()
-    parser.add_argument("--output", default="artifacts/flights/latest")
-    parser.add_argument("--keep-open", action="store_true")
-    args = parser.parse_args()
-    folder = Path(args.output)
-    folder.mkdir(parents=True, exist_ok=True)
-    agent = Agent(URL, GOALS)
-    try:
-        for state in agent.run():
-            last = state["history"][-1] if state["history"] else {}
-            print(state["elapsed_ms"], state["status"], last.get("action", ""), flush=True)
-    finally:
-        state = agent.snapshot()
-        state["verification"] = verify(state["page"])
-        (folder / "state.json").write_text(json.dumps(state, indent=2))
-        (folder / "session.json").write_text(
-            json.dumps({"target": agent.browser.target, "session": agent.browser.session})
-        )
-        if not args.keep_open:
-            agent.close()
-    print(json.dumps(state["verification"], indent=2))
-    if not state["verification"]["passed"]:
-        raise SystemExit("Final page did not satisfy the route/date checks")
-
-
-if __name__ == "__main__":
-    main()

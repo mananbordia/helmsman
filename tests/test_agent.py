@@ -509,7 +509,7 @@ def test_fingerprint_tracks_values_and_identity_not_screenshots():
 
 @pytest.mark.parametrize("changed", ["Departure", "Where from?", "Where to?", "year"])
 def test_flight_verification_rejects_wrong_trip(changed):
-    from examples.flights import verify
+    from tests.flights_task import verify
 
     actual = {
         "url": "https://www.google.com/travel/flights/search?tfs=example",

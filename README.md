@@ -78,15 +78,9 @@ with Agent(
         print(state["elapsed_ms"], state["status"])
 ```
 
-Run with `uv run --env-file .env python your_script.py`. The same policy can run a different task:
+Run with `uv run --env-file .env python your_script.py`. Change the URL and the goal to run any other task.
 
-```bash
-uv run --env-file .env python examples/run.py \
-  --url https://en.wikipedia.org/wiki/Main_Page \
-  --goal 'Find and open the Wikipedia article about Gödel’s incompleteness theorems.'
-```
-
-`uv run --env-file .env python examples/flights.py --keep-open` performs the flight search, checks the actual route/date/results, and saves its trace. It does not select or book a flight.
+`tests/flights_task.py` defines the measured flight task and an independent check on the page it ends on: the route, date, and visible results are read from the page rather than trusted from the model's own answer. The test suite and the measurement both use it.
 
 ## Why it moves
 

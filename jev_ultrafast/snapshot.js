@@ -9,6 +9,68 @@
   const safe = e => !['password','file','hidden'].includes(e.type);
   const visible = e => !e.closest('[aria-hidden="true"],[inert]') &&
     e.checkVisibility({checkOpacity:true,checkVisibilityCSS:true});
+  const onScreen = e => {
+    if (!visible(e)) return false;
+    const r=e.getBoundingClientRect();
+    return r.width>=20 && r.height>=20 && r.bottom>0 && r.right>0 &&
+      r.top<innerHeight && r.left<innerWidth;
+  };
+  cache.detectCaptcha=()=>{
+    const challenge=document.querySelector('form#challenge-form');
+    const challengeStage=document.querySelector('#challenge-stage');
+    if (challenge?.action?.includes('/cdn-cgi/challenge-platform/') ||
+        ((challenge || challengeStage) && /just a moment|verify you are human/i.test(document.title))) {
+      return {provider:'cloudflare',surface:'challenge_page'};
+    }
+    for (const frame of document.querySelectorAll('iframe')) {
+      if (!onScreen(frame)) continue;
+      let host='', path='';
+      try { const url=new URL(frame.src,location.href); host=url.hostname; path=url.pathname; } catch {}
+      const title=frame.title.toLowerCase();
+      if (((host==='www.google.com' || host==='www.recaptcha.net' || host==='recaptcha.net') &&
+          path.startsWith('/recaptcha/')) || title.includes('recaptcha')) {
+        return {provider:'recaptcha',surface:'widget'};
+      }
+      if (host==='hcaptcha.com' || host.endsWith('.hcaptcha.com') || title.includes('hcaptcha')) {
+        return {provider:'hcaptcha',surface:'widget'};
+      }
+      if (host==='challenges.cloudflare.com' ||
+          (title.includes('cloudflare') && title.includes('challenge'))) {
+        return {provider:'turnstile',surface:'widget'};
+      }
+      if (host==='arkoselabs.com' || host.endsWith('.arkoselabs.com') || title.includes('arkose')) {
+        return {provider:'arkose',surface:'widget'};
+      }
+      if (/captcha|verify you are human/i.test(title)) {
+        return {provider:'unknown',surface:'widget'};
+      }
+    }
+    for (const [selector,provider] of [
+      ['.g-recaptcha','recaptcha'],['.h-captcha','hcaptcha'],['.cf-turnstile','turnstile'],
+      ['.geetest_captcha','geetest'],['.frc-captcha','friendlycaptcha']
+    ]) {
+      if ([...document.querySelectorAll(selector)].some(onScreen)) {
+        return {provider,surface:'widget'};
+      }
+    }
+    const humanPrompt=/(?:confirm|verify|prove).{0,100}(?:human|not a robot)/i;
+    const challengePrompt=/(?:complete.{0,80}challenge|select all (?:squares|images|tiles)|captcha)/i;
+    for (const e of document.querySelectorAll('div,[role="dialog"],section')) {
+      if (!onScreen(e)) continue;
+      const copy=e.innerText?.slice(0,1500)||'';
+      if (!humanPrompt.test(copy) || !challengePrompt.test(copy)) continue;
+      if (e.getAttribute('role')==='dialog' || e.getAttribute('aria-modal')==='true' ||
+          ['fixed','absolute'].includes(getComputedStyle(e).position)) {
+        return {provider:'unknown',surface:'challenge_page'};
+      }
+    }
+    return null;
+  };
+  const captcha=cache.detectCaptcha();
+  if (captcha) return {url:location.href,title:document.title,w:innerWidth,h:innerHeight,
+    text:'',scroll:{y:scrollY,height:document.documentElement.scrollHeight},actions:[],
+    marker:[performance.timeOrigin,location.href,captcha],page_key:[],guards:{},
+    omitted_actions:0,captcha};
   const name = (e,seen=new Set()) => {
     if (!e || seen.has(e)) return '';
     seen.add(e);
@@ -43,7 +105,8 @@
   };
   cache.pageKey=()=>[performance.timeOrigin,location.href,scrollX,scrollY,innerWidth,innerHeight,
     [...document.querySelectorAll('input,textarea,select')].filter(safe)
-      .map(e=>[identity(e),e.value,e.checked,e.selectedIndex,e.disabled,e.readOnly])];
+      .map(e=>[identity(e),e.value,e.checked,e.selectedIndex,e.disabled,e.readOnly]),
+    cache.detectCaptcha()];
   cache.guard=e=>{
     if (!e?.isConnected || !visible(e)) return null;
     const scope=e.closest('form,dialog,[role="dialog"],article,li,tr,[role="row"]') || e.parentElement;
@@ -76,18 +139,54 @@
       const value='value' in e ? String(e.value) :
         e.isContentEditable || rname==='combobox' ? e.innerText.trim() : '';
       actions.push({...base,kind:editable?'fill':'click',value});
-      if (editable) actions.push({...base,kind:'click',value,label:'Open '+base.label});
+      const searchForm=e.closest('form[role="search"]');
+      const canSubmitSearch=editable && searchForm?.method==='get' && value.trim();
+      if (canSubmitSearch) actions.push({...base,kind:'submit',value,label:'Submit search with Enter'});
+      else if (editable) actions.push({...base,kind:'click',value,label:'Open '+base.label});
     }
   }
+  // A text node keeps a rect even when an ancestor has clipped it away or its own
+  // colour is transparent, so both are checked separately. Without them a visually
+  // hidden helper reads as ordinary page content. Overflow is memoised because
+  // siblings share ancestors and getComputedStyle is the expensive half of this.
+  const overflow=new WeakMap(), faded=new WeakMap();
+  const clips=a=>{
+    if (!overflow.has(a)) {
+      const s=getComputedStyle(a);
+      overflow.set(a,/hidden|clip/.test(s.overflow+s.overflowX+s.overflowY)||s.clip!=='auto');
+    }
+    return overflow.get(a);
+  };
+  const painted=(e,r)=>{
+    if (!faded.has(e)) faded.set(e,getComputedStyle(e).color==='rgba(0, 0, 0, 0)');
+    if (faded.get(e)) return false;
+    // How much of the line survives every clipping ancestor, as a fraction of the line
+    // itself. A one-pixel visually-hidden helper shows a fraction of a percent of the
+    // text it holds, while truncated text still shows full lines and normal layout
+    // clips nothing, so a ratio separates them where containment tests did not: a
+    // tolerance rejected visible text over a single pixel of sub-pixel rounding, and a
+    // relative height test still dropped real results from a live page.
+    const area=r.width*r.height;
+    let visible=area;
+    for (let a=e; a && a!==document.documentElement; a=a.parentElement) {
+      if (!clips(a)) continue;
+      const box=a.getBoundingClientRect();
+      const w=Math.min(box.right,r.right)-Math.max(box.left,r.left);
+      const h=Math.min(box.bottom,r.bottom)-Math.max(box.top,r.top);
+      if (w<=0||h<=0) return false;
+      visible=Math.min(visible,w*h);
+    }
+    return visible>area*0.1;
+  };
   const words=[], walker=document.createTreeWalker(document.body,NodeFilter.SHOW_TEXT);
   const range=document.createRange(); let node,length=0;
   while ((node=walker.nextNode()) && length<6000) {
     const value=node.textContent.trim(), parent=node.parentElement;
     if (!value || !parent || parent.closest('script,style,noscript,template') || !visible(parent)) continue;
     range.selectNodeContents(node); const r=range.getBoundingClientRect();
-    if (r.width>0 && r.height>0 && r.bottom>0 && r.top<innerHeight && r.right>0 && r.left<innerWidth) {
-      words.push(value); length+=value.length;
-    }
+    if (!(r.width>0 && r.height>0 && r.bottom>0 && r.top<innerHeight && r.right>0 && r.left<innerWidth)) continue;
+    if (!painted(parent,r)) continue;
+    words.push(value); length+=value.length;
   }
   const text=words.join('\n').slice(0,6000), height=document.documentElement.scrollHeight;
   const page_key=cache.pageKey(), guards={};

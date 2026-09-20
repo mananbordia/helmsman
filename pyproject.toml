@@ -7,9 +7,6 @@ license = "MIT"
 requires-python = ">=3.12"
 dependencies = ["browser-harness==0.1.13", "httpx[http2]>=0.28,<1"]
 
-[project.scripts]
-jev = "jev_ultrafast.demo:main"
-
 [build-system]
 requires = ["hatchling"]
 build-backend = "hatchling.build"

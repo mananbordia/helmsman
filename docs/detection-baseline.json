@@ -1,0 +1,69 @@
+{
+  "inventory": {
+    "userAgent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) HeadlessChrome/153.0.0.0 Safari/537.36",
+    "platform": "MacIntel",
+    "languages": "en-US,en",
+    "hardwareConcurrency": 8,
+    "deviceMemory": null,
+    "viewport": "1120x780",
+    "screen": "800x600",
+    "devicePixelRatio": 1,
+    "webglVendor": "Google Inc. (Apple)"
+  },
+  "checks": [
+    {
+      "level": "pass",
+      "name": "CDP Runtime.enable leak",
+      "detail": "",
+      "advice": ""
+    },
+    {
+      "level": "pass",
+      "name": "navigator.webdriver",
+      "detail": "",
+      "advice": ""
+    },
+    {
+      "level": "pass",
+      "name": "Driver globals",
+      "detail": "",
+      "advice": ""
+    },
+    {
+      "level": "fail",
+      "name": "Headless user agent",
+      "detail": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) HeadlessChrome/153.0.0.0 Safari/537.36",
+      "advice": "Run non-headless, or make the user agent match the platform it claims."
+    },
+    {
+      "level": "fail",
+      "name": "Viewport larger than the screen",
+      "detail": "viewport 1120x780 exceeds screen 800x600",
+      "advice": "Set a window size and screen that agree, as a real display would."
+    },
+    {
+      "level": "pass",
+      "name": "Plugin count",
+      "detail": "",
+      "advice": ""
+    },
+    {
+      "level": "pass",
+      "name": "window.chrome",
+      "detail": "",
+      "advice": ""
+    },
+    {
+      "level": "pass",
+      "name": "Native function integrity",
+      "detail": "",
+      "advice": ""
+    }
+  ]
+}
+[fail] Headless user agent: Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) HeadlessChrome/153.0.0.0 Safari/537.36
+        Run non-headless, or make the user agent match the platform it claims.
+[fail] Viewport larger than the screen: viewport 1120x780 exceeds screen 800x600
+        Set a window size and screen that agree, as a real display would.
+
+fail: 2 failure(s) across 8 checks

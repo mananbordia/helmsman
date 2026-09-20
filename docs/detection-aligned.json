@@ -1,0 +1,65 @@
+{
+  "inventory": {
+    "userAgent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/153.0.0.0 Safari/537.36",
+    "platform": "MacIntel",
+    "languages": "en-US,en",
+    "hardwareConcurrency": 8,
+    "deviceMemory": null,
+    "viewport": "1120x780",
+    "screen": "1920x1080",
+    "devicePixelRatio": 1,
+    "webglVendor": "Google Inc. (Apple)"
+  },
+  "checks": [
+    {
+      "level": "pass",
+      "name": "CDP Runtime.enable leak",
+      "detail": "",
+      "advice": ""
+    },
+    {
+      "level": "pass",
+      "name": "navigator.webdriver",
+      "detail": "",
+      "advice": ""
+    },
+    {
+      "level": "pass",
+      "name": "Driver globals",
+      "detail": "",
+      "advice": ""
+    },
+    {
+      "level": "pass",
+      "name": "Headless user agent",
+      "detail": "",
+      "advice": ""
+    },
+    {
+      "level": "pass",
+      "name": "Viewport larger than the screen",
+      "detail": "",
+      "advice": ""
+    },
+    {
+      "level": "pass",
+      "name": "Plugin count",
+      "detail": "",
+      "advice": ""
+    },
+    {
+      "level": "pass",
+      "name": "window.chrome",
+      "detail": "",
+      "advice": ""
+    },
+    {
+      "level": "pass",
+      "name": "Native function integrity",
+      "detail": "",
+      "advice": ""
+    }
+  ]
+}
+
+pass: 0 failure(s) across 8 checks

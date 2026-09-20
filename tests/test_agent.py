@@ -211,11 +211,194 @@ def test_changed_field_context_does_not_reuse_generated_text(runner, monkeypatch
     assert helper.call_count == 2
 
 
-def test_loading_waits_do_not_trigger_no_progress_stop(runner):
-    for _ in range(5):
+def test_loading_waits_with_changing_page_do_not_trigger_no_progress_stop(runner):
+    for index in range(5):
+        updated = page()
+        updated["text"] = f"Loading result {index}"
+        updated["fingerprint"] = fingerprint(updated)
+        runner.state["browser"].observe.return_value = updated
         runner.state["decision"] = decision("wait")
         runner.command("act", {"fingerprint": runner.state["page"]["fingerprint"]})
     assert len(runner.state["history"]) == 5 and runner.state["status"] == "ready"
+
+
+def test_stalled_waits_stop_before_another_wait(runner):
+    for _ in range(5):
+        runner.state["decision"] = decision("wait")
+        result = runner.command("act", {"fingerprint": runner.state["page"]["fingerprint"]})
+    assert result["status"] == "blocked"
+    assert result["block_reason"] == {"code": "no_progress", "actions": 4}
+    assert len(result["history"]) == 4
+    assert runner.state["browser"].act.call_count == 4
+
+
+def test_model_block_is_reported_without_browser_mutation(runner):
+    runner.state["decision"] = decision("BLOCKED")
+    result = runner.command("act", {"fingerprint": runner.state["page"]["fingerprint"]})
+    assert result["status"] == "blocked"
+    assert result["block_reason"] == {"code": "model_blocked"}
+    runner.state["browser"].act.assert_not_called()
+
+
+def test_repeated_actions_without_page_change_report_why_the_run_stopped(runner):
+    for _ in range(3):
+        runner.state["decision"] = decision("e3")
+        result = runner.command("act", {"fingerprint": runner.state["page"]["fingerprint"]})
+    assert result["status"] == "blocked"
+    assert result["block_reason"] == {"code": "no_progress", "actions": 2}
+    assert len(result["history"]) == 2
+    assert runner.state["browser"].act.call_count == 2
+
+
+def test_reloaded_same_page_is_not_counted_as_progress(runner, monkeypatch):
+    monkeypatch.setattr(loop.time, "sleep", lambda _seconds: None)
+    for index in range(3):
+        reloaded = page()
+        for action in reloaded["actions"]:
+            if "node" in action:
+                action["node"] += (index + 1) * 100
+        reloaded["fingerprint"] = fingerprint(reloaded)
+        runner.state["browser"].observe.return_value = reloaded
+        runner.state["decision"] = decision("e3")
+        result = runner.command("act", {"fingerprint": runner.state["page"]["fingerprint"]})
+        assert result["history"][-1]["page_changed"] is False
+    assert result["status"] == "blocked"
+    assert result["block_reason"] == {"code": "no_progress", "actions": 2}
+    assert runner.state["browser"].act.call_count == 2
+
+
+def test_repeated_page_cycle_stops_before_action_budget(runner):
+    first = page()
+    second = page()
+    second["text"] = "Other page"
+    second["fingerprint"] = fingerprint(second)
+    for destination in [second, first] * 3:
+        runner.state["browser"].observe.return_value = destination
+        runner.state["decision"] = decision("e3")
+        result = runner.command("act", {"fingerprint": runner.state["page"]["fingerprint"]})
+    assert result["status"] == "blocked"
+    assert result["block_reason"] == {"code": "navigation_loop", "repetitions": 3, "period": 2}
+    assert len(result["history"]) == 6
+
+
+def test_delayed_page_update_is_observed_before_another_decision(runner, monkeypatch):
+    changed = page()
+    changed["text"] = "Results loaded"
+    changed["fingerprint"] = fingerprint(changed)
+    runner.state["browser"].observe.side_effect = [page(), changed]
+    sleep = Mock()
+    monkeypatch.setattr(loop.time, "sleep", sleep)
+    runner.state["decision"] = decision("e3")
+
+    result = runner.command("act", {"fingerprint": runner.state["page"]["fingerprint"]})
+
+    runner.state["browser"].act.assert_called_once()
+    assert runner.state["browser"].observe.call_count == 2
+    sleep.assert_called_once_with(1.0)
+    assert result["page"]["text"] == "Results loaded"
+    assert result["history"][-1]["page_changed"] is True
+    assert result["no_progress_count"] == 0
+    assert result["status"] == "ready"
+
+
+def test_visible_captcha_blocks_without_model_call_or_browser_action(runner, monkeypatch):
+    runner.state["page"]["captcha"] = {"provider": "recaptcha", "surface": "widget"}
+    runner.state["decision"] = None
+    choose = Mock(side_effect=AssertionError("CAPTCHA must not reach the model"))
+    monkeypatch.setattr(loop, "choose", choose)
+    result = runner.command("tick")
+    assert result["status"] == "blocked"
+    assert result["block_reason"] == {
+        "code": "captcha_detected", "provider": "recaptcha", "surface": "widget"
+    }
+    assert result["decisions"] == []
+    choose.assert_not_called()
+    runner.state["browser"].act.assert_not_called()
+
+
+def test_human_input_is_available_only_during_blocked_handoff(runner):
+    event = {"kind": "pointer_down", "x": 10, "y": 10}
+    runner.state["human_control"] = False
+    with pytest.raises(ValueError, match="Take control"):
+        runner.human_input(event)
+    runner.state["status"] = "blocked"
+    with pytest.raises(ValueError, match="Take control"):
+        runner.human_view()
+    runner.state["human_control"] = True
+    runner.state["browser"].human_view.return_value = {"screenshot": "live"}
+    assert runner.human_view() == {"screenshot": "live", "ready_to_resume": False}
+    changed = page()
+    changed["text"] = "The challenge is gone"
+    changed["fingerprint"] = fingerprint(changed)
+    runner.state["browser"].observe.return_value = changed
+    assert runner.human_view()["ready_to_resume"] is True
+    runner.human_input(event)
+    runner.state["browser"].human_input.assert_called_once_with(event)
+
+
+def test_captcha_appearing_after_action_stops_next_decision(runner):
+    blocked = page()
+    blocked["captcha"] = {"provider": "hcaptcha", "surface": "widget"}
+    blocked["fingerprint"] = fingerprint(blocked)
+    runner.state["browser"].observe.return_value = blocked
+    runner.state["decision"] = decision("e3")
+    result = runner.command("act", {"fingerprint": runner.state["page"]["fingerprint"]})
+    assert result["status"] == "blocked"
+    assert result["block_reason"]["code"] == "captcha_detected"
+    assert len(result["history"]) == 1
+    runner.state["browser"].act.assert_called_once()
+
+
+def test_human_handoff_waits_for_challenge_to_clear_before_resuming(runner, monkeypatch):
+    blocked = page()
+    blocked["captcha"] = {"provider": "unknown", "surface": "challenge_page"}
+    blocked["fingerprint"] = fingerprint(blocked)
+    runner.state["page"] = blocked
+    choose = Mock(side_effect=AssertionError("No model call during handoff"))
+    monkeypatch.setattr(loop, "choose", choose)
+
+    assert runner.command("tick")["status"] == "blocked"
+    taken = runner.command("handoff")
+    assert taken["human_control"] is True
+    runner.state["browser"].show.assert_called_once()
+    with pytest.raises(ValueError, match="Human control"):
+        runner.command("tick")
+    runner.state["browser"].act.assert_not_called()
+    choose.assert_not_called()
+
+    runner.state["browser"].observe.return_value = blocked
+    still_blocked = runner.command("resume")
+    assert still_blocked["status"] == "blocked"
+    assert still_blocked["block_reason"]["code"] == "captcha_detected"
+    assert still_blocked["human_control"] is True
+
+    cleared = page()
+    cleared["text"] = "Search results are now visible"
+    cleared["fingerprint"] = fingerprint(cleared)
+    runner.state["browser"].observe.return_value = cleared
+    resumed = runner.command("resume")
+    assert resumed["status"] == "ready"
+    assert resumed["block_reason"] is None
+    assert resumed["human_control"] is False
+    assert len(resumed["history"]) == 0
+
+
+def test_no_progress_handoff_needs_a_changed_page(runner):
+    for _ in range(3):
+        runner.state["decision"] = decision("e3")
+        runner.command("act", {"fingerprint": runner.state["page"]["fingerprint"]})
+    runner.command("handoff")
+    unchanged = runner.command("resume")
+    assert unchanged["status"] == "blocked"
+    assert unchanged["block_reason"]["code"] == "no_progress"
+
+    changed = page()
+    changed["text"] = "The human opened a different result"
+    changed["fingerprint"] = fingerprint(changed)
+    runner.state["browser"].observe.return_value = changed
+    assert runner.command("resume")["status"] == "ready"
+    runner.state["decision"] = decision("e3")
+    assert runner.command("act", {"fingerprint": changed["fingerprint"]})["status"] == "ready"
 
 
 def test_stale_observation_preserves_executed_action(runner):
@@ -251,6 +434,51 @@ def test_executor_rejects_a_stale_page_before_browser_input(monkeypatch):
     operation.assert_not_called()
 
 
+def test_action_pacing_rechecks_freshness_before_input(monkeypatch):
+    import jev_ultrafast.browser as browser
+
+    b = browser.Browser.__new__(browser.Browser)
+    b.next_action_at = 11.0
+    b.session = "test"
+    clock = {"now": 10.0}
+    events = []
+
+    def sleep(seconds):
+        events.append(("sleep", seconds))
+        clock["now"] += seconds
+
+    def fresh(*_args):
+        events.append(("fresh", clock["now"]))
+        return False  # The page changed during the pause.
+
+    b.fresh = fresh
+    operation = Mock()
+    monkeypatch.setattr(browser.time, "monotonic", lambda: clock["now"])
+    monkeypatch.setattr(browser.time, "sleep", sleep)
+    monkeypatch.setattr(browser, "browser_operation", operation)
+
+    with pytest.raises(StalePage, match="Page changed"):
+        b.act(page()["actions"][2], page())
+
+    assert events == [("sleep", 1.0), ("fresh", 11.0)]
+    operation.assert_not_called()
+
+
+def test_executor_refuses_a_detected_captcha_before_browser_input(monkeypatch):
+    import jev_ultrafast.browser as browser
+
+    b = browser.Browser.__new__(browser.Browser)
+    b.fresh = Mock(return_value=True)
+    operation = Mock()
+    monkeypatch.setattr(browser, "browser_operation", operation)
+    p = page()
+    p["captcha"] = {"provider": "recaptcha", "surface": "widget"}
+    with pytest.raises(StalePage, match="CAPTCHA"):
+        b.act(p["actions"][2], p)
+    b.fresh.assert_not_called()
+    operation.assert_not_called()
+
+
 @pytest.mark.parametrize("response", [{"exceptionDetails": {}}, {"result": {}}])
 def test_interrupted_dropdown_mutation_cannot_be_retried_as_stale(monkeypatch, response):
     import jev_ultrafast.browser as browser
@@ -273,6 +501,9 @@ def test_fingerprint_tracks_values_and_identity_not_screenshots():
     other["screenshot"] = "changed"
     assert fingerprint(p) == fingerprint(other)
     other["actions"][0]["node"] = 99
+    assert fingerprint(p) != fingerprint(other)
+    other = deepcopy(p)
+    other["captcha"] = {"provider": "recaptcha", "surface": "widget"}
     assert fingerprint(p) != fingerprint(other)
 
 
@@ -318,3 +549,34 @@ def test_navigation_during_prediction_reobserves_without_action(runner):
     assert runner.state["status"] == "ready"
     assert runner.state["decision"] is None
     runner.state["browser"].act.assert_not_called()
+
+
+def test_navigation_after_click_retries_only_observation(runner, monkeypatch):
+    monkeypatch.setattr(loop.time, "sleep", lambda _seconds: None)
+    changed = page()
+    changed["url"] = "https://example.test/next"
+    changed["fingerprint"] = fingerprint(changed)
+    runner.state["decision"] = decision("e3")
+    runner.state["browser"].observe.side_effect = [
+        StalePage("Document navigating"),
+        StalePage("Document navigating"),
+        changed,
+    ]
+    monkeypatch.setattr(loop, "choose", lambda *_args: decision("e3"))
+    result = runner.command("tick")
+    assert result["status"] == "ready"
+    assert result["page"]["url"] == changed["url"]
+    assert result["history"][-1]["page_changed"] is True
+    runner.state["browser"].act.assert_called_once()
+
+
+def test_navigation_timeout_blocks_without_replaying_click(runner, monkeypatch):
+    runner.state["decision"] = decision("e3")
+    runner.state["browser"].observe.side_effect = StalePage("Document navigating")
+    monkeypatch.setattr(loop, "choose", lambda *_args: decision("e3"))
+    now = iter([0, 6])
+    monkeypatch.setattr(loop.time, "monotonic", lambda: next(now))
+    result = runner.command("tick")
+    assert result["status"] == "blocked"
+    assert result["block_reason"]["code"] == "page_unavailable"
+    runner.state["browser"].act.assert_called_once()

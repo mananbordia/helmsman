@@ -24,7 +24,14 @@ def post_json(url, key, body):
             time.sleep(0.5 * 2**attempt)
             continue
         if response.is_error:
-            raise RuntimeError(f"Model provider returned HTTP {response.status_code}; no action executed.")
+            # Keep the provider's own explanation. The status alone is not a diagnosis:
+            # a 403 means an invalid key at one provider and a blocked network at
+            # another, and discarding the body is what left a real run undiagnosable.
+            detail = " ".join(response.text.split())[:200]
+            raise RuntimeError(
+                f"Model provider returned HTTP {response.status_code}; no action executed."
+                + (f" Provider said: {detail}" if detail else "")
+            )
         return response.json()
     raise RuntimeError("Model unavailable")
 
@@ -80,7 +87,7 @@ def action_space(actions):
     return elements, targets, controls
 
 
-def choose(state, goal, history, loop_since=0):
+def choose(state, goal, history, loop_since=0, guidance=()):
     elements, targets, controls = action_space(state["actions"])
     warning = loop_warning(history[loop_since:])
     rules = NEXT_ACTION + ("\n" + warning if warning else "")
@@ -92,8 +99,19 @@ def choose(state, goal, history, loop_since=0):
     operations = {key: labels[key] for key in targets}
     operations.update({key: value["label"] for key, value in controls.items()})
     operations.update(DONE="Every requirement is visibly satisfied.", BLOCKED="No supported operation can progress.")
+    # Operator messages arrive after the task starts, so they travel alongside the goal
+    # and every question sees them. They cannot widen the action space: the model still
+    # chooses only from what is offered here.
+    messages = [item["text"] for item in guidance]
+
+    def instructions(**extra):
+        block = {"goal": goal, "rules": rules, **extra}
+        if messages:
+            block["operator_messages"] = messages
+        return block
+
     questions = {
-        "operation": {"type": "choice", "criteria": operations, "instructions": {"goal": goal, "rules": rules}}
+        "operation": {"type": "choice", "criteria": operations, "instructions": instructions()}
     }
     for operation, candidates in targets.items():
         questions[operation.lower() + "_target"] = {
@@ -106,7 +124,7 @@ def choose(state, goal, history, loop_since=0):
                 }
                 for index, a in candidates.items()
             },
-            "instructions": {"goal": goal, "operation": operation, "rules": [rules, TARGET]},
+            "instructions": instructions(operation=operation, rules=[rules, TARGET]),
         }
     body = {
         "model": os.environ.get("TYPESAFE_MODEL", "jev-latest"),

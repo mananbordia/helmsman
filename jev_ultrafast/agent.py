@@ -92,6 +92,7 @@ class Agent:
             human_control=False,
             no_progress_count=0,
             loop_since=0,
+            guidance=[],
             plan=plan,
             plan_index=0,
             decisions=[],
@@ -151,6 +152,12 @@ class Agent:
         if browser is not None:
             browser.start_live()
 
+    def show_browser(self):
+        """Bring the owned tab forward so a person can watch or work in it directly."""
+        browser = self.state.get("browser")
+        if browser is not None:
+            browser.show()
+
     def stop_live(self):
         """Stop streaming. Only one stream can exist per machine, so a run that can no
         longer change the page must give the shared event queue back."""
@@ -184,6 +191,25 @@ class Agent:
         elif name == "continue":
             state["browser"].set_paused(False)
             if state["status"] == "paused":
+                state["status"] = "ready"
+        elif name == "guide":
+            # An operator message, for when the run has stalled and the person can see
+            # what it should do instead. It reaches the model as an instruction and gives
+            # the run a clean stall baseline, or the same guard would block it again on
+            # the history that caused the block in the first place.
+            text = (body or {}).get("text")
+            if not isinstance(text, str) or not 0 < len(text.strip()) <= 600:
+                raise ValueError("A message to Jev must be 1 to 600 characters")
+            if state["status"] == "done":
+                raise ValueError("This run has finished; start a new task")
+            if (state.get("block_reason") or {}).get("code") == "captcha_detected":
+                raise ValueError("Solve the challenge in the browser window, then choose Resume task")
+            state["guidance"].append({"text": text.strip(), "elapsed_ms": state["elapsed_ms"]})
+            state["decision"] = None
+            state["no_progress_count"] = 0
+            state["loop_since"] = len(state["history"])
+            state["block_reason"] = None
+            if state["status"] not in {"done", "paused"}:
                 state["status"] = "ready"
         elif name == "handoff":
             if state["status"] != "blocked":
@@ -245,7 +271,8 @@ class Agent:
             drift = state["browser"].idle_drift()
             try:
                 state["decision"] = choose(
-                    state["page"], state["goal"], state["history"], state.get("loop_since", 0)
+                    state["page"], state["goal"], state["history"], state.get("loop_since", 0),
+                    state.get("guidance", ()),
                 )
             finally:
                 if drift is not None:

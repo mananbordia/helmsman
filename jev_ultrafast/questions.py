@@ -23,7 +23,10 @@ owner distinct from a related company or organization; do not silently substitut
 the other. For a superlative such as most popular or most commits, inspect comparable
 candidates and their actual metrics before choosing. If the person's identity or account
 cannot be verified from the available page evidence, choose BLOCKED rather than guess.
-BLOCKED means no supported operation can make reliable progress."""
+BLOCKED means no supported operation can make reliable progress.
+Operator messages are instructions from the person running the task. Follow the most recent one
+when it changes what to do next, and prefer it over an earlier goal detail it contradicts. They
+never allow an operation or element that is not offered here."""
 
 TARGET = """Choose the best observed target if the next operation is the one specified in this question.
 Use the user's entire goal, field values, nearby text, and recent actions. This question chooses only

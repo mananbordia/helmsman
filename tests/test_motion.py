@@ -390,7 +390,7 @@ def agent_with_stub_browser():
     runner.state = {
         "browser": stub, "goal": "goal", "page": {"url": "u", "actions": [], "fingerprint": "fp"},
         "decision": None, "history": [], "status": "ready", "block_reason": None,
-        "human_control": False, "no_progress_count": 0, "loop_since": 0,
+        "human_control": False, "no_progress_count": 0, "loop_since": 0, "guidance": [],
         "plan": ["goal"], "plan_index": 0, "decisions": [], "text_calls": [],
         "elapsed_ms": 0, "started_at": None, "record": False,
     }
@@ -481,6 +481,16 @@ def test_starting_the_stream_uses_the_browser():
     runner, stub = agent_with_stub_browser()
     runner.start_live()
     stub.start_live.assert_called_once_with()
+
+
+def test_showing_the_browser_uses_the_browser():
+    # A local viewer watches the real window rather than a stream, so raising it has to
+    # reach the browser and do nothing else.
+    runner, stub = agent_with_stub_browser()
+    runner.show_browser()
+    stub.show.assert_called_once_with()
+    stub.observe.assert_not_called()
+    stub.act.assert_not_called()
 
 
 def test_the_default_screen_is_larger_than_the_viewport():
@@ -744,3 +754,121 @@ def test_pointer_position_carries_between_actions(monkeypatch):
     # The second leg starts where the first one finished.
     assert first["pointer"] == (250.0, 150.0)
     assert second["pointer"] == (260.0, 160.0)
+
+
+# ------------------------------------------------------- operator guidance
+
+
+def test_guidance_clears_the_block_and_starts_a_fresh_stall_baseline():
+    # The guard that stopped the run reads the history that caused the block, so a
+    # message that leaves the baseline alone would be blocked again on its next step
+    # and the operator could never get the run moving.
+    runner, _stub = agent_with_stub_browser()
+    runner.state["history"] = [{"step": 1}, {"step": 2}]
+    runner.state["status"] = "blocked"
+    runner.state["block_reason"] = {"code": "no_progress", "actions": 2}
+    runner.state["no_progress_count"] = 2
+
+    runner.command("guide", {"text": "Use the Sign In to Pay link instead"})
+
+    assert runner.state["status"] == "ready"
+    assert runner.state["block_reason"] is None
+    assert runner.state["loop_since"] == 2, "the old history would block the next step again"
+    assert runner.state["no_progress_count"] == 0
+    assert runner.state["guidance"] == [{"text": "Use the Sign In to Pay link instead", "elapsed_ms": 0}]
+
+
+def test_a_guidance_message_reaches_the_model(monkeypatch):
+    from jev_ultrafast import agent as agent_module
+
+    runner, stub = agent_with_stub_browser()
+    runner.command("guide", {"text": "The bill is behind the sign-in link"})
+    seen = {}
+
+    def choose(page, goal, history, loop_since=0, guidance=()):
+        seen["guidance"] = list(guidance)
+        return {"choice": "wait", "operation": "WAIT", "target": None, "confidence": 1.0,
+                "probabilities": {"wait": 1.0}, "latency_ms": 1, "usage": {}}
+
+    monkeypatch.setattr(agent_module, "choose", choose)
+    stub.fresh.return_value = True
+    runner.command("predict")
+
+    assert [item["text"] for item in seen["guidance"]] == ["The bill is behind the sign-in link"]
+
+
+def test_guidance_is_refused_when_a_captcha_is_in_the_way():
+    # A challenge is the operator's to solve in the window; a message cannot do it, and
+    # saying so is more useful than accepting text that cannot help.
+    runner, _stub = agent_with_stub_browser()
+    runner.state["status"] = "blocked"
+    runner.state["block_reason"] = {"code": "captcha_detected", "provider": "recaptcha"}
+
+    with pytest.raises(ValueError, match="Solve the challenge"):
+        runner.command("guide", {"text": "Just ignore the captcha"})
+    assert runner.state["guidance"] == []
+
+
+def test_guidance_is_refused_on_a_finished_run():
+    runner, _stub = agent_with_stub_browser()
+    runner.state["status"] = "done"
+
+    with pytest.raises(ValueError, match="finished"):
+        runner.command("guide", {"text": "Keep going"})
+
+
+@pytest.mark.parametrize("text", ["", "   ", None, 42, "x" * 601])
+def test_an_empty_or_oversized_message_is_refused(text):
+    runner, _stub = agent_with_stub_browser()
+    with pytest.raises(ValueError, match="1 to 600"):
+        runner.command("guide", {"text": text})
+
+
+class RequestCaptured(Exception):
+    """Raised by the stubbed provider so the request body can be inspected."""
+
+
+def test_operator_messages_reach_every_question(monkeypatch):
+    # Guidance has to arrive with both the operation question and the target questions:
+    # "click the other button" is a target instruction, not an operation one.
+    from jev_ultrafast import model
+
+    monkeypatch.setenv("TYPESAFE_API_KEY", "test")
+    captured = {}
+
+    def post(_url, _key, body):
+        captured.update(body)
+        raise RequestCaptured
+
+    monkeypatch.setattr(model, "post_json", post)
+    page = {"url": "https://example.com", "title": "Example", "text": "Continue",
+            "actions": [{"id": "e1", "label": "Continue", "kind": "click", "node": 1, "role": "button"}]}
+
+    with pytest.raises(RequestCaptured):
+        model.choose(page, "Open the result", [], 0, [{"text": "Use the second button", "elapsed_ms": 900}])
+
+    questions = captured["questions"]
+    assert questions["operation"]["instructions"]["operator_messages"] == ["Use the second button"]
+    targets = [name for name in questions if name.endswith("_target")]
+    assert targets, "this page should offer a target question"
+    for name in targets:
+        assert questions[name]["instructions"]["operator_messages"] == ["Use the second button"]
+
+
+def test_no_guidance_leaves_the_question_shape_unchanged(monkeypatch):
+    from jev_ultrafast import model
+
+    monkeypatch.setenv("TYPESAFE_API_KEY", "test")
+    captured = {}
+
+    def post(_url, _key, body):
+        captured.update(body)
+        raise RequestCaptured
+
+    monkeypatch.setattr(model, "post_json", post)
+    page = {"url": "https://example.com", "title": "Example", "text": "Nothing to do", "actions": []}
+
+    with pytest.raises(RequestCaptured):
+        model.choose(page, "Open the result", [])
+
+    assert "operator_messages" not in captured["questions"]["operation"]["instructions"]

@@ -10,9 +10,10 @@ from .loop_guard import action_key, detect_loop, redundant_choice
 from .model import action_space, choose, field_context, field_text
 from .questions import MAX_STEPS
 
-# Stops worth asking a vision model about. A challenge is the operator's to solve, and an
-# exhausted action budget is the end of the run, so neither is a misunderstanding to fix.
-ESCALATE_ON = {"model_blocked", "no_progress", "navigation_loop", "page_unavailable"}
+# Every stop is worth asking about, because a block code can be wrong -- a false captcha
+# once hid a sign-in wall -- and the fallback judges the page rather than the detector.
+# One exception: an exhausted budget is the end of the run, so no answer could be acted on.
+NEVER_ESCALATE = {"budget_exhausted"}
 MAX_ESCALATIONS = 3
 
 
@@ -127,7 +128,7 @@ class Agent:
         state["decision"] = None
         state["status"] = "blocked"
         state["block_reason"] = reason
-        state["incident"] = self._incident(reason)
+        state["incident"] = self._incident(reason, refresh=True)
         self._escalate()
         return self.snapshot()
 
@@ -139,7 +140,8 @@ class Agent:
         agent has already been handed is not worth paying for again.
         """
         state = self.state
-        if (state.get("block_reason") or {}).get("code") not in ESCALATE_ON:
+        code = (state.get("block_reason") or {}).get("code")
+        if code in NEVER_ESCALATE:
             return
         if len(state["escalations"]) >= MAX_ESCALATIONS or not diagnose.configured():
             return
@@ -154,10 +156,17 @@ class Agent:
             state["escalations"].append({
                 **attempt, "layer": "unknown", "route": "abstain", "message": "", "needs": "",
                 "confidence": 0.0, "reason": str(error), "outcome": None, "pending": False,
+                "applied": False,
             })
             return
-        state["escalations"].append({**attempt, **result, "outcome": None, "pending": False})
+        state["escalations"].append({**attempt, **result, "outcome": None, "pending": False,
+                                     "applied": False})
         if result["route"] != "jev":
+            return
+        if code == "captcha_detected":
+            # A message cannot solve a challenge, and the agent trying is the one thing we
+            # deliberately never do. Keep the block, and keep the advice on the record
+            # rather than acting on it.
             return
         # A message for the agent is guidance, from the fallback rather than the operator.
         # The stall baseline resets for the same reason a human message resets it: the
@@ -170,10 +179,21 @@ class Agent:
         state["block_reason"] = None
         state["status"] = "ready"
         state["escalations"][-1]["pending"] = True
+        state["escalations"][-1]["applied"] = True
 
-    def _incident(self, reason):
-        """What the run looked like at the moment it stopped. Best effort, never fatal."""
+    def _incident(self, reason, refresh=False):
+        """What the run looked like at the moment it stopped. Best effort, never fatal.
+
+        A refresh reads the page again first. The observation that triggered the stop can
+        predate the page it describes: a stop was filed against a page whose text had not
+        rendered yet, beside a picture showing a full login form.
+        """
         state = self.state
+        if refresh:
+            try:
+                state["page"] = state["browser"].observe(screenshot=self.screenshots)
+            except Exception:  # noqa: BLE001 - the stop matters more than the retry
+                pass
         page = state.get("page") or {}
         try:
             shot = state["browser"].screenshot()
@@ -201,6 +221,14 @@ class Agent:
     def stop_for_captcha(self):
         captcha = self.state["page"].get("captcha")
         if not captcha:
+            return False
+        # A wall withholds its actions, so an empty action list is the signal. Scroll and
+        # wait are always offered and say nothing about whether the page is usable.
+        ordinary = [a for a in self.state["page"].get("actions") or []
+                    if a.get("kind") not in {"scroll", "wait"}]
+        if captcha.get("surface") == "widget" and ordinary:
+            # A provider marker beside real controls is not a wall. Let the run try, and let
+            # the loop guards and the fallback stop it if the page really is unusable.
             return False
         self._blocked({"code": "captcha_detected", **captcha})
         return True

@@ -15,6 +15,16 @@
     return r.width>=20 && r.height>=20 && r.bottom>0 && r.right>0 &&
       r.top<innerHeight && r.left<innerWidth;
   };
+  // Invisible mode (reCAPTCHA v3) renders an anchor frame that nobody interacts with: it
+  // scores the session and passes. Treating it as a challenge stopped a run on a page
+  // whose only real blocker was a sign-in, and the frame was already gone by the next
+  // look. A bframe is the actual challenge popup, so it still counts.
+  const invisibleAnchor=frame=>{
+    try {
+      const url=new URL(frame.src,location.href);
+      return url.pathname.endsWith('/recaptcha/api2/anchor') && url.searchParams.get('size')==='invisible';
+    } catch { return false; }
+  };
   cache.detectCaptcha=()=>{
     const challenge=document.querySelector('form#challenge-form');
     const challengeStage=document.querySelector('#challenge-stage');
@@ -23,7 +33,7 @@
       return {provider:'cloudflare',surface:'challenge_page'};
     }
     for (const frame of document.querySelectorAll('iframe')) {
-      if (!onScreen(frame)) continue;
+      if (!onScreen(frame) || invisibleAnchor(frame)) continue;
       let host='', path='';
       try { const url=new URL(frame.src,location.href); host=url.hostname; path=url.pathname; } catch {}
       const title=frame.title.toLowerCase();
@@ -49,7 +59,9 @@
       ['.g-recaptcha','recaptcha'],['.h-captcha','hcaptcha'],['.cf-turnstile','turnstile'],
       ['.geetest_captcha','geetest'],['.frc-captcha','friendlycaptcha']
     ]) {
-      if ([...document.querySelectorAll(selector)].some(onScreen)) {
+      // A widget declared invisible asks nothing of a person, so it is not a challenge.
+      if ([...document.querySelectorAll(selector)].some(
+        e => onScreen(e) && e.getAttribute('data-size') !== 'invisible')) {
         return {provider,surface:'widget'};
       }
     }
@@ -66,11 +78,12 @@
     }
     return null;
   };
+  // A challenge is read like any other page, because its text is evidence and blanking it
+  // is what left a stop with nothing to explain itself. Only the *actions* are withheld,
+  // and only when the challenge is a wall: the page text is the challenge, or the page
+  // offers nothing else to do. A provider widget beside real controls is not a wall, and
+  // stopping on one is what hid a sign-in behind a false captcha.
   const captcha=cache.detectCaptcha();
-  if (captcha) return {url:location.href,title:document.title,w:innerWidth,h:innerHeight,
-    text:'',scroll:{y:scrollY,height:document.documentElement.scrollHeight},actions:[],
-    marker:[performance.timeOrigin,location.href,captcha],page_key:[],guards:{},
-    omitted_actions:0,captcha};
   const name = (e,seen=new Set()) => {
     if (!e || seen.has(e)) return '';
     seen.add(e);
@@ -194,13 +207,18 @@
   // Compare meaning and identity. Geometry is always resolved and hit-tested just before input.
   const semantics=actions.map(({rect,...action})=>action);
   const marker=[performance.timeOrigin,location.href,scrollX,scrollY,innerWidth,innerHeight,
-    document.title,text,semantics,page_key[6]];
+    document.title,text,semantics,page_key[6],captcha];
   const omitted_actions=Math.max(0,actions.length-250);
   actions.splice(250);
   actions.forEach((a,i)=>a.id='e'+(i+1));
   if (scrollY+innerHeight<height-2) actions.push({id:'scroll_down',kind:'scroll',label:'Scroll down',delta:560});
   if (scrollY>0) actions.push({id:'scroll_up',kind:'scroll',label:'Scroll up',delta:-560});
   actions.push({id:'wait',kind:'wait',label:'Wait for the page to update'});
+  // Scroll and wait are always offered, so they say nothing about whether the page is
+  // usable. A wall is a challenge with no other real control on it.
+  const ordinary=actions.filter(a=>a.kind!=='scroll'&&a.kind!=='wait');
+  const challengeWall=!!captcha && (captcha.surface!=='widget' || !ordinary.length);
   return {url:location.href,title:document.title,w:innerWidth,h:innerHeight,text,
-    scroll:{y:scrollY,height},actions,marker,page_key,guards,omitted_actions};
+    scroll:{y:scrollY,height},actions:challengeWall?[]:actions,marker,page_key,guards,
+    omitted_actions,captcha};
 })()

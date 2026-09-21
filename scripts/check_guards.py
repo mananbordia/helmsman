@@ -204,8 +204,12 @@ def main():
         assert browser.evaluate("window.clicks || 0") == 0
         page = browser.observe(screenshot=False)
         assert page["captcha"] == {"provider": "recaptcha", "surface": "widget"}
-        assert page["actions"] == []
-        passed.append("visible CAPTCHA blocks a stale action without a model call")
+        # The page still offers its own controls, so it is workable: a marker beside real
+        # controls is not a wall. Stopping here is what hid a sign-in behind a false
+        # captcha. The wall case, where the actions are withheld, is checked above.
+        assert [a for a in page["actions"] if a["kind"] not in {"scroll", "wait"}], page["actions"]
+        assert page["text"], "the page text must survive a challenge signal"
+        passed.append("a captcha widget is reported without blanking a usable page")
 
         for provider, source in {
             "hcaptcha": "https://newassets.hcaptcha.com/captcha/v1/fixture",
@@ -218,6 +222,43 @@ def main():
             page = browser.observe(screenshot=False)
             assert page["captcha"] == {"provider": provider, "surface": "widget"}
         passed.append("visible hCaptcha, Turnstile, and Arkose frames are detected")
+
+        # An invisible anchor frame is reCAPTCHA scoring the session, not a challenge for a
+        # person. Blocking on one stopped a run whose only real blocker was a sign-in, and
+        # the frame was gone by the next look. The visible form must still block, or the
+        # fix went too far.
+        def anchor_fixture(query):
+            return "data:text/html," + quote(
+                '<title>Captcha</title><div style="position:fixed;inset:0;background:#fff"></div>'
+                '<input style="position:fixed;left:40px;top:600px;width:300px;height:40px">'
+                f'<iframe src="https://www.google.com/recaptcha/api2/anchor?{query}" '
+                'style="position:fixed;left:40px;top:100px;width:300px;height:80px"></iframe>'
+            )
+
+        def observe_when_settled(title):
+            """A frame that loads from the network churns the document long enough for a
+            read to race it. Reading again is what StalePage is for."""
+            for _ in range(40):
+                try:
+                    page = browser.observe(screenshot=False)
+                except StalePage:
+                    time.sleep(0.1)
+                    continue
+                if page["title"] == title:
+                    return page
+                time.sleep(0.1)
+            raise AssertionError(f"the {title} fixture never settled")
+
+        for name, query, blocks in (("invisible", "size=invisible&k=test", False),
+                                    ("visible", "size=normal&k=test", True)):
+            browser.call("Page.navigate", url=anchor_fixture(query))
+            found = observe_when_settled("Captcha").get("captcha")
+            if blocks:
+                assert found == {"provider": "recaptcha", "surface": "widget"}, \
+                    f"a {name} anchor must still block: {found}"
+            else:
+                assert found is None, f"an {name} anchor must not block: {found}"
+        passed.append("an invisible anchor frame does not block, a visible one still does")
 
         for provider, selector in {
             "geetest": "geetest_captcha",

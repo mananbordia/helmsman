@@ -303,14 +303,17 @@ def test_delayed_page_update_is_observed_before_another_decision(runner, monkeyp
 
 
 def test_visible_captcha_blocks_without_model_call_or_browser_action(runner, monkeypatch):
-    runner.state["page"]["captcha"] = {"provider": "recaptcha", "surface": "widget"}
+    # A challenge page is a wall: nothing for the agent to do, so it must not reach the
+    # model. A provider widget beside usable controls is not a wall and is covered in
+    # test_motion.
+    runner.state["page"]["captcha"] = {"provider": "recaptcha", "surface": "challenge_page"}
     runner.state["decision"] = None
     choose = Mock(side_effect=AssertionError("CAPTCHA must not reach the model"))
     monkeypatch.setattr(loop, "choose", choose)
     result = runner.command("tick")
     assert result["status"] == "blocked"
     assert result["block_reason"] == {
-        "code": "captcha_detected", "provider": "recaptcha", "surface": "widget"
+        "code": "captcha_detected", "provider": "recaptcha", "surface": "challenge_page"
     }
     assert result["decisions"] == []
     choose.assert_not_called()
@@ -339,7 +342,7 @@ def test_human_input_is_available_only_during_blocked_handoff(runner):
 
 def test_captcha_appearing_after_action_stops_next_decision(runner):
     blocked = page()
-    blocked["captcha"] = {"provider": "hcaptcha", "surface": "widget"}
+    blocked["captcha"] = {"provider": "hcaptcha", "surface": "challenge_page"}
     blocked["fingerprint"] = fingerprint(blocked)
     runner.state["browser"].observe.return_value = blocked
     runner.state["decision"] = decision("e3")

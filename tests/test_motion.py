@@ -384,6 +384,10 @@ def agent_with_stub_browser():
     runner = Agent.__new__(Agent)
     stub = Mock()
     stub.paused.return_value = False
+    # A stop reads the page again, so the stub has to answer with a real page rather than
+    # a bare Mock.
+    stub.observe.return_value = {"url": "u", "title": "t", "text": "page text",
+                                 "actions": [], "fingerprint": "fp"}
     runner.pending_text = None
     runner.screenshots = False
     runner.record_dir = None
@@ -883,6 +887,10 @@ def test_a_block_keeps_what_the_page_looked_like():
     # A stopped run is when the page most needs looking at, and by then it has moved on.
     runner, stub = agent_with_stub_browser()
     stub.screenshot.return_value = "jpeg-base64"
+    stub.observe.return_value = {
+        "url": "https://example.com/pay", "title": "Pay", "text": "Sign in to pay",
+        "actions": [], "fingerprint": "fp",
+    }
     runner.state["page"] = {
         "url": "https://example.com/pay", "title": "Pay", "text": "Sign in to pay",
         "actions": [], "fingerprint": "fp", "captcha": {"provider": "recaptcha"},
@@ -912,6 +920,38 @@ def test_a_failed_capture_still_blocks_the_run():
     assert runner.state["status"] == "blocked"
     assert runner.state["incident"]["screenshot"] is None
     assert runner.state["incident"]["block_reason"]["provider"] == "hcaptcha"
+
+
+def test_a_stop_reads_the_page_again_before_filing_it():
+    # The observation that triggers a stop can predate the page it describes: a stop was
+    # filed against a page whose text had not rendered, next to a picture of a full form.
+    runner, stub = agent_with_stub_browser()
+    stub.screenshot.return_value = "jpeg"
+    stub.observe.return_value = {
+        "url": "https://example.com/login", "title": "Login", "fingerprint": "fresh",
+        "text": "Login to the portal\nRemember me\nSign in", "actions": [],
+    }
+    runner.state["page"] = {"url": "https://example.com/login", "title": "Login",
+                            "fingerprint": "stale", "text": "", "actions": []}
+
+    runner._blocked({"code": "captcha_detected", "provider": "recaptcha"})
+
+    assert runner.state["incident"]["text"].startswith("Login to the portal")
+    assert runner.state["page"]["fingerprint"] == "fresh", "the run should hold the fresh read"
+
+
+def test_a_page_that_will_not_read_still_files_the_stop():
+    from jev_ultrafast.browser import StalePage
+
+    runner, stub = agent_with_stub_browser()
+    stub.screenshot.return_value = "jpeg"
+    stub.observe.side_effect = StalePage("Document navigating")
+    runner.state["page"]["text"] = "what was last seen"
+
+    snapshot = runner._blocked({"code": "page_unavailable"})
+
+    assert snapshot["status"] == "blocked"
+    assert runner.state["incident"]["text"] == "what was last seen"
 
 
 def test_finishing_records_no_incident():
@@ -964,6 +1004,7 @@ def test_a_stop_asks_the_fallback_and_hands_the_message_to_the_agent(monkeypatch
     assert runner.state["loop_since"] == 1, "the guard would stop the next step on the same history"
     assert runner.state["escalations"][0]["route"] == "jev"
     assert runner.state["escalations"][0]["pending"] is True
+    assert runner.state["escalations"][0]["applied"] is True
 
 
 def test_a_stop_that_needs_a_person_keeps_the_block(monkeypatch):
@@ -994,24 +1035,52 @@ def test_an_abstain_keeps_the_block(monkeypatch):
     assert runner.state["guidance"] == []
 
 
-def test_a_challenge_never_reaches_the_fallback(monkeypatch):
+def test_a_challenge_is_asked_about_but_never_acted_on(monkeypatch):
+    # Every stop is asked about now, because a block code can be wrong -- a false captcha
+    # once hid a sign-in wall. But a challenge stays the operator's: whatever the fallback
+    # suggests, the agent is never told to attempt one.
     from jev_ultrafast import agent as agent_module
 
     calls = []
-    monkeypatch.setattr(agent_module, "diagnose", fallback("jev", calls=calls, message="keep going"))
+    monkeypatch.setattr(agent_module, "diagnose",
+                        fallback("jev", calls=calls, message="tick the checkbox"))
     runner, stub = agent_with_stub_browser()
     stub.screenshot.return_value = "jpeg"
-    runner.state["page"]["captcha"] = {"provider": "recaptcha"}
+    runner.state["page"]["captcha"] = {"provider": "recaptcha", "surface": "challenge_page"}
 
     assert runner.stop_for_captcha() is True
 
-    assert calls == [], "a message cannot solve a challenge"
+    assert len(calls) == 1, "the fallback should still have been asked"
     assert runner.state["status"] == "blocked"
-    assert runner.state["guidance"] == []
+    assert runner.state["guidance"] == [], "the agent must not be told to attempt a challenge"
+    assert runner.state["escalations"][-1]["applied"] is False
 
 
-@pytest.mark.parametrize("code", ["model_blocked", "no_progress", "navigation_loop", "page_unavailable"])
-def test_every_escalating_stop_asks_once(monkeypatch, code):
+def test_a_provider_widget_on_a_usable_page_does_not_stop_the_run():
+    # A marker beside a form is not a wall. Stopping here is what hid a sign-in behind a
+    # false captcha; the guards and the fallback catch it if the page really is unusable.
+    runner, stub = agent_with_stub_browser()
+    runner.state["page"]["captcha"] = {"provider": "recaptcha", "surface": "widget"}
+    runner.state["page"]["actions"] = [{"id": "e1", "label": "Login", "kind": "click"}]
+
+    assert runner.stop_for_captcha() is False
+    assert runner.state["status"] == "ready"
+
+
+def test_a_provider_widget_with_nothing_else_to_do_stops_the_run():
+    runner, stub = agent_with_stub_browser()
+    runner.state["page"]["captcha"] = {"provider": "hcaptcha", "surface": "widget"}
+
+    assert runner.stop_for_captcha() is True
+
+    assert runner.state["status"] == "blocked"
+    assert runner.state["block_reason"] == {"code": "captcha_detected",
+                                            "provider": "hcaptcha", "surface": "widget"}
+
+
+@pytest.mark.parametrize("code", ["model_blocked", "no_progress", "navigation_loop",
+                                  "page_unavailable", "captcha_detected"])
+def test_every_stop_is_asked_about(monkeypatch, code):
     from jev_ultrafast import agent as agent_module
 
     calls = []
@@ -1022,6 +1091,19 @@ def test_every_escalating_stop_asks_once(monkeypatch, code):
     runner._blocked({"code": code})
 
     assert calls == [{"code": code}]
+
+
+def test_an_exhausted_budget_is_not_worth_asking_about(monkeypatch):
+    from jev_ultrafast import agent as agent_module
+
+    calls = []
+    monkeypatch.setattr(agent_module, "diagnose", fallback("jev", calls=calls, message="go again"))
+    runner, stub = agent_with_stub_browser()
+    stub.screenshot.return_value = "jpeg"
+
+    runner._blocked({"code": "budget_exhausted"})
+
+    assert calls == [], "no answer could be acted on once the action budget is spent"
 
 
 def test_the_fallback_is_not_asked_twice_about_one_page(monkeypatch):

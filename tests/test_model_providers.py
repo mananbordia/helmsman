@@ -4,7 +4,7 @@ from unittest.mock import Mock
 
 import pytest
 
-from jev_ultrafast import model
+from helmsman import model
 
 
 def test_a_provider_error_keeps_what_the_provider_said(monkeypatch):

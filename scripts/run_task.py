@@ -95,7 +95,7 @@ def main():
     loaded = load_environment()
     print(f"  env          : {loaded}")
 
-    from jev_ultrafast import Agent
+    from helmsman import Agent
 
     seen, state = 0, None
     agent = Agent(args.url, args.goal)

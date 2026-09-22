@@ -11,8 +11,8 @@ recorded baseline instead of a feeling.
 import json
 import sys
 
-from jev_ultrafast.browser import Browser
-from jev_ultrafast.detection import PROBE, inventory, summarize, worst
+from helmsman.browser import Browser
+from helmsman.detection import PROBE, inventory, summarize, worst
 
 
 def main():

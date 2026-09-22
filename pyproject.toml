@@ -1,5 +1,5 @@
 [project]
-name = "jev-ultrafast"
+name = "helmsman"
 version = "0.1.0"
 description = "A browser agent that chooses instead of generating."
 readme = "README.md"

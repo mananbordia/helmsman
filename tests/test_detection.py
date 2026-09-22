@@ -1,6 +1,6 @@
 """Offline contracts for the automation-visibility probe."""
 
-from jev_ultrafast import detection
+from helmsman import detection
 
 
 def clean():

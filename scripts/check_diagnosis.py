@@ -38,7 +38,7 @@ def load_incident(argument):
 
 
 def main():
-    from jev_ultrafast import diagnose
+    from helmsman import diagnose
 
     load_environment()
     if not diagnose.configured():

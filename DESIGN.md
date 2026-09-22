@@ -1,6 +1,6 @@
-# Jev Ultrafast: architecture
+# Helmsman: architecture
 
-Jev Ultrafast takes a natural-language goal, observes the current browser page, chooses **one supported action**, executes it, and observes again. It is a small browser executor, not a general planner: it has no site-specific scripts, persistent task queue, or payment workflow. This document describes the **current implementation** in this repository.
+Helmsman takes a natural-language goal, observes the current browser page, chooses **one supported action**, executes it, and observes again. It is a small browser executor, not a general planner: it has no site-specific scripts, persistent task queue, or payment workflow. This document describes the **current implementation** in this repository.
 
 ## System at a glance
 
@@ -22,13 +22,13 @@ flowchart LR
 
 | Layer | Responsibility | Source |
 | --- | --- | --- |
-| Caller | Supplies the starting URL and one goal; consumes run state and supplies any user interface. | [`jev_ultrafast/agent.py`](jev_ultrafast/agent.py) |
-| Agent | Coordinates observe → decide → act, tracks action history, enforces budgets, and stops on completion or a block. | [`jev_ultrafast/agent.py`](jev_ultrafast/agent.py) |
-| Observation | Reads visible page text, controls, values, and CAPTCHA signals in one browser-side evaluation. | [`jev_ultrafast/snapshot.js`](jev_ultrafast/snapshot.js) |
-| Decision | Offers only operations and targets observed on the current page. Validates the selected TypeSafe answer. | [`jev_ultrafast/model.py`](jev_ultrafast/model.py), [`jev_ultrafast/questions.py`](jev_ultrafast/questions.py) |
-| Loop guard | Compares completed actions with stable visible-page states and stops repeated no-ops or short cycles. | [`jev_ultrafast/loop_guard.py`](jev_ultrafast/loop_guard.py) |
-| Text helper | Generates a value for a selected editable field; has no browser control. | [`jev_ultrafast/model.py`](jev_ultrafast/model.py) |
-| Execution | Uses Browser Harness and Chrome DevTools Protocol (CDP) to check freshness, resolve the observed node, and send browser input. | [`jev_ultrafast/browser.py`](jev_ultrafast/browser.py) |
+| Caller | Supplies the starting URL and one goal; consumes run state and supplies any user interface. | [`helmsman/agent.py`](helmsman/agent.py) |
+| Agent | Coordinates observe → decide → act, tracks action history, enforces budgets, and stops on completion or a block. | [`helmsman/agent.py`](helmsman/agent.py) |
+| Observation | Reads visible page text, controls, values, and CAPTCHA signals in one browser-side evaluation. | [`helmsman/snapshot.js`](helmsman/snapshot.js) |
+| Decision | Offers only operations and targets observed on the current page. Validates the selected TypeSafe answer. | [`helmsman/model.py`](helmsman/model.py), [`helmsman/questions.py`](helmsman/questions.py) |
+| Loop guard | Compares completed actions with stable visible-page states and stops repeated no-ops or short cycles. | [`helmsman/loop_guard.py`](helmsman/loop_guard.py) |
+| Text helper | Generates a value for a selected editable field; has no browser control. | [`helmsman/model.py`](helmsman/model.py) |
+| Execution | Uses Browser Harness and Chrome DevTools Protocol (CDP) to check freshness, resolve the observed node, and send browser input. | [`helmsman/browser.py`](helmsman/browser.py) |
 
 ### Architectural rules
 
@@ -161,7 +161,7 @@ Offline tests exercise choice validation, observed targets, stale-page behavior,
 ```bash
 uv run ruff check .
 uv run pytest
-node --check jev_ultrafast/snapshot.js
+node --check helmsman/snapshot.js
 uv build
 ```
 

@@ -1,8 +1,8 @@
 """Offline checks for agent loop safety without provider calls."""
 
-from jev_ultrafast import model, questions
-from jev_ultrafast.browser import progress_fingerprint
-from jev_ultrafast.loop_guard import action_key, detect_loop, loop_warning, redundant_choice
+from helmsman import model, questions
+from helmsman.browser import progress_fingerprint
+from helmsman.loop_guard import action_key, detect_loop, loop_warning, redundant_choice
 
 
 def test_the_rules_separate_a_quoted_error_from_a_page_outage():

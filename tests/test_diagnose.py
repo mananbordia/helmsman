@@ -4,7 +4,7 @@ import json
 
 import pytest
 
-from jev_ultrafast import diagnose
+from helmsman import diagnose
 
 
 def incident():

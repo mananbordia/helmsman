@@ -8,9 +8,9 @@ from unittest.mock import Mock
 
 import pytest
 
-from jev_ultrafast import browser, motion
-from jev_ultrafast.agent import Agent
-from jev_ultrafast.browser import Paused, StalePage, browser_operation
+from helmsman import browser, motion
+from helmsman.agent import Agent
+from helmsman.browser import Paused, StalePage, browser_operation
 
 
 def seeded(seed=1):
@@ -430,7 +430,7 @@ def test_pausing_does_not_reopen_a_finished_run():
 
 
 def test_a_paused_run_makes_no_model_call(monkeypatch):
-    from jev_ultrafast import agent as agent_module
+    from helmsman import agent as agent_module
 
     runner, stub = agent_with_stub_browser()
     stub.paused.return_value = True
@@ -450,7 +450,7 @@ def test_a_paused_run_does_not_touch_the_page():
 
 
 def test_resuming_after_a_pause_observes_and_chooses_again(monkeypatch):
-    from jev_ultrafast import agent as agent_module
+    from helmsman import agent as agent_module
 
     runner, stub = agent_with_stub_browser()
     runner.state["status"] = "paused"
@@ -785,7 +785,7 @@ def test_guidance_clears_the_block_and_starts_a_fresh_stall_baseline():
 
 
 def test_a_guidance_message_reaches_the_model(monkeypatch):
-    from jev_ultrafast import agent as agent_module
+    from helmsman import agent as agent_module
 
     runner, stub = agent_with_stub_browser()
     runner.command("guide", {"text": "The bill is behind the sign-in link"})
@@ -837,7 +837,7 @@ class RequestCaptured(Exception):
 def test_operator_messages_reach_every_question(monkeypatch):
     # Guidance has to arrive with both the operation question and the target questions:
     # "click the other button" is a target instruction, not an operation one.
-    from jev_ultrafast import model
+    from helmsman import model
 
     monkeypatch.setenv("TYPESAFE_API_KEY", "test")
     captured = {}
@@ -862,7 +862,7 @@ def test_operator_messages_reach_every_question(monkeypatch):
 
 
 def test_no_guidance_leaves_the_question_shape_unchanged(monkeypatch):
-    from jev_ultrafast import model
+    from helmsman import model
 
     monkeypatch.setenv("TYPESAFE_API_KEY", "test")
     captured = {}
@@ -941,7 +941,7 @@ def test_a_stop_reads_the_page_again_before_filing_it():
 
 
 def test_a_page_that_will_not_read_still_files_the_stop():
-    from jev_ultrafast.browser import StalePage
+    from helmsman.browser import StalePage
 
     runner, stub = agent_with_stub_browser()
     stub.screenshot.return_value = "jpeg"
@@ -989,7 +989,7 @@ def fallback(route="abstain", calls=None, **extra):
 
 
 def test_a_stop_asks_the_fallback_and_hands_the_message_to_the_agent(monkeypatch):
-    from jev_ultrafast import agent as agent_module
+    from helmsman import agent as agent_module
 
     runner, stub = agent_with_stub_browser()
     stub.screenshot.return_value = "jpeg"
@@ -1008,7 +1008,7 @@ def test_a_stop_asks_the_fallback_and_hands_the_message_to_the_agent(monkeypatch
 
 
 def test_a_stop_that_needs_a_person_keeps_the_block(monkeypatch):
-    from jev_ultrafast import agent as agent_module
+    from helmsman import agent as agent_module
 
     runner, stub = agent_with_stub_browser()
     stub.screenshot.return_value = "jpeg"
@@ -1022,7 +1022,7 @@ def test_a_stop_that_needs_a_person_keeps_the_block(monkeypatch):
 
 
 def test_an_abstain_keeps_the_block(monkeypatch):
-    from jev_ultrafast import agent as agent_module
+    from helmsman import agent as agent_module
 
     runner, stub = agent_with_stub_browser()
     stub.screenshot.return_value = "jpeg"
@@ -1039,7 +1039,7 @@ def test_a_challenge_is_asked_about_but_never_acted_on(monkeypatch):
     # Every stop is asked about now, because a block code can be wrong -- a false captcha
     # once hid a sign-in wall. But a challenge stays the operator's: whatever the fallback
     # suggests, the agent is never told to attempt one.
-    from jev_ultrafast import agent as agent_module
+    from helmsman import agent as agent_module
 
     calls = []
     monkeypatch.setattr(agent_module, "diagnose",
@@ -1081,7 +1081,7 @@ def test_a_provider_widget_with_nothing_else_to_do_stops_the_run():
 @pytest.mark.parametrize("code", ["model_blocked", "no_progress", "navigation_loop",
                                   "page_unavailable", "captcha_detected"])
 def test_every_stop_is_asked_about(monkeypatch, code):
-    from jev_ultrafast import agent as agent_module
+    from helmsman import agent as agent_module
 
     calls = []
     monkeypatch.setattr(agent_module, "diagnose", fallback("abstain", calls=calls))
@@ -1094,7 +1094,7 @@ def test_every_stop_is_asked_about(monkeypatch, code):
 
 
 def test_an_exhausted_budget_is_not_worth_asking_about(monkeypatch):
-    from jev_ultrafast import agent as agent_module
+    from helmsman import agent as agent_module
 
     calls = []
     monkeypatch.setattr(agent_module, "diagnose", fallback("jev", calls=calls, message="go again"))
@@ -1108,7 +1108,7 @@ def test_an_exhausted_budget_is_not_worth_asking_about(monkeypatch):
 
 def test_the_fallback_is_not_asked_twice_about_one_page(monkeypatch):
     # Nothing changed since the last answer, so another answer cannot be better.
-    from jev_ultrafast import agent as agent_module
+    from helmsman import agent as agent_module
 
     calls = []
     monkeypatch.setattr(agent_module, "diagnose", fallback("abstain", calls=calls))
@@ -1122,7 +1122,7 @@ def test_the_fallback_is_not_asked_twice_about_one_page(monkeypatch):
 
 
 def test_the_fallback_stops_after_its_cap(monkeypatch):
-    from jev_ultrafast import agent as agent_module
+    from helmsman import agent as agent_module
 
     calls = []
     monkeypatch.setattr(agent_module, "diagnose", fallback("abstain", calls=calls))
@@ -1139,7 +1139,7 @@ def test_the_fallback_stops_after_its_cap(monkeypatch):
 def test_no_provider_means_no_escalation(monkeypatch):
     from types import SimpleNamespace
 
-    from jev_ultrafast import agent as agent_module
+    from helmsman import agent as agent_module
 
     monkeypatch.setattr(agent_module, "diagnose", SimpleNamespace(configured=lambda: False))
     runner, stub = agent_with_stub_browser()
@@ -1152,7 +1152,7 @@ def test_no_provider_means_no_escalation(monkeypatch):
 
 
 def test_a_failing_fallback_does_not_hide_the_stop(monkeypatch):
-    from jev_ultrafast import agent as agent_module
+    from helmsman import agent as agent_module
 
     def explode(_incident, _goal):
         raise RuntimeError("Vision provider returned HTTP 503")
@@ -1173,7 +1173,7 @@ def test_a_failing_fallback_does_not_hide_the_stop(monkeypatch):
 def test_the_next_action_records_whether_the_message_helped(monkeypatch):
     import time as time_module
 
-    from jev_ultrafast import agent as agent_module
+    from helmsman import agent as agent_module
 
     runner, stub = agent_with_stub_browser()
     stub.screenshot.return_value = "jpeg"

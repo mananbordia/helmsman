@@ -1,4 +1,4 @@
-# Jev Ultrafast
+# Helmsman
 
 Read README.md before editing. Keep the loop small: page -> indexed elements -> operation + target -> execution.
 
@@ -16,5 +16,5 @@ Read README.md before editing. Keep the loop small: page -> indexed elements -> 
 - Keep the measured task, README claims, raw evidence, and model-call counts consistent.
 - Do not commit or push unless the user requests it.
 
-Checks: uv run ruff check ., uv run pytest, node --check on jev_ultrafast/{snapshot,cursor,detection}.js, uv build.
+Checks: uv run ruff check ., uv run pytest, node --check on helmsman/{snapshot,cursor,detection}.js, uv build.
 Real-browser checks, no model calls: `scripts/check_guards.py` and `scripts/check_detection.py <url>`. Paid calls: `scripts/smoke.py`, `scripts/measure_flights.py`.

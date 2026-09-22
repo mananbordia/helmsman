@@ -7,7 +7,7 @@ from urllib.parse import quote
 
 from PIL import Image
 
-from jev_ultrafast.browser import Browser, Paused, StalePage
+from helmsman.browser import Browser, Paused, StalePage
 
 
 def pointer_pixel(browser, point, timeout=8.0, dark=600):

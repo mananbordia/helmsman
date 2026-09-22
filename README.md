@@ -1,10 +1,10 @@
 <img src="docs/banner.svg" alt="Jev Ultrafast · Browser Use × TypeSafe" width="100%" />
 
-# Jev Ultrafast ⚡
+# Helmsman ⚡
 
 > [!IMPORTANT]
 > **The Browser Use Cloud waitlist is open.** Get early access to ultrafast browser agents in the cloud.
-> **[Join the waitlist →](https://browser-use.com/ultrafast?utm_source=github&utm_medium=readme&utm_campaign=jev-ultrafast)**
+> **[Join the waitlist →](https://browser-use.com/ultrafast?utm_source=github&utm_medium=readme&utm_campaign=helmsman)**
 
 **A browser agent with a dynamic, indexed action space.**
 
@@ -12,7 +12,7 @@ Give it one goal. [TypeSafe's Jev](https://docs.typesafe.ai/introduction) picks 
 
 **Measured run: Zürich → London on Google Flights in 7.1 seconds.** It includes a natural-language goal, text generation, and loading waits. That run predates the current action pacing, so new runs take longer.
 
-[Measurements](docs/performance.md) · [Read the loop](jev_ultrafast/agent.py)
+[Measurements](docs/performance.md) · [Read the loop](helmsman/agent.py)
 
 ## The action space
 
@@ -51,8 +51,8 @@ There are no site-specific action scripts or prepared field strings in the polic
 ## Try it
 
 ```bash
-git clone https://github.com/browser-use/jev-ultrafast.git
-cd jev-ultrafast
+git clone https://github.com/browser-use/helmsman.git
+cd helmsman
 uv sync
 cp .env.example .env
 # Add TYPESAFE_API_KEY and TEXT_MODEL_API_KEY.
@@ -67,7 +67,7 @@ Chrome connects through [Browser Harness](https://github.com/browser-use/browser
 ## Use the library
 
 ```python
-from jev_ultrafast import Agent
+from helmsman import Agent
 
 with Agent(
     "https://www.google.com/travel/flights?hl=en",
@@ -108,14 +108,14 @@ Every executed target is resolved from an observed node. The executor rechecks p
 
 | File | Job |
 | --- | --- |
-| [agent.py](jev_ultrafast/agent.py) | The complete loop and text-helper handoff |
-| [snapshot.js](jev_ultrafast/snapshot.js) | Atomic DOM snapshot, indexed controls, freshness guards |
-| [browser.py](jev_ultrafast/browser.py) | Browser connection, current geometry, execution |
-| [motion.py](jev_ultrafast/motion.py) | Pointer paths, aim, typing and scroll timing |
-| [detection.py](jev_ultrafast/detection.py) | What a page can learn about this browser |
-| [loop_guard.py](jev_ultrafast/loop_guard.py) | Action/page repetition checks and corrective warning |
-| [model.py](jev_ultrafast/model.py) | Dynamic operation/target heads and text generation |
-| [questions.py](jev_ultrafast/questions.py) | Model instructions |
+| [agent.py](helmsman/agent.py) | The complete loop and text-helper handoff |
+| [snapshot.js](helmsman/snapshot.js) | Atomic DOM snapshot, indexed controls, freshness guards |
+| [browser.py](helmsman/browser.py) | Browser connection, current geometry, execution |
+| [motion.py](helmsman/motion.py) | Pointer paths, aim, typing and scroll timing |
+| [detection.py](helmsman/detection.py) | What a page can learn about this browser |
+| [loop_guard.py](helmsman/loop_guard.py) | Action/page repetition checks and corrective warning |
+| [model.py](helmsman/model.py) | Dynamic operation/target heads and text generation |
+| [questions.py](helmsman/questions.py) | Model instructions |
 
 ## Evidence and limits
 
@@ -134,9 +134,9 @@ CAPTCHA detection is intentionally read-only. It recognizes visible reCAPTCHA, h
 ```bash
 uv run ruff check .
 uv run pytest
-node --check jev_ultrafast/snapshot.js
-node --check jev_ultrafast/cursor.js
-node --check jev_ultrafast/detection.js
+node --check helmsman/snapshot.js
+node --check helmsman/cursor.js
+node --check helmsman/detection.js
 uv build
 ```
 

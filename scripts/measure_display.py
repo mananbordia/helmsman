@@ -22,7 +22,7 @@ import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import quote
 
-from jev_ultrafast.browser import Browser
+from helmsman.browser import Browser
 
 SECONDS = 4.0
 POLL_INTERVALS = (0, 4, 8, 16)

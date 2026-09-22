@@ -13,7 +13,7 @@ from functools import partial
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
-from jev_ultrafast import Agent
+from helmsman import Agent
 
 FIXTURE_DIRECTORY = Path(__file__).resolve().parents[1] / "tests"
 GOALS = (
